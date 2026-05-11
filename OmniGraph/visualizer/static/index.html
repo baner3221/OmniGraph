@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OmniGraph — Knowledge Graph Visualizer</title>
+    <meta name="description" content="Interactive visualization of codebase knowledge graphs with call chain tracing and architecture exploration">
+    <link rel="stylesheet" href="/static/style.css">
+    <!-- Cytoscape.js (MIT License) -->
+    <script src="https://unpkg.com/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
+    <!-- Layout plugins (MIT License) -->
+    <script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
+    <script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
+</head>
+<body>
+    <div id="app">
+        <!-- Sidebar -->
+        <aside id="sidebar">
+            <div class="sidebar-header">
+                <h1>OmniGraph</h1>
+                <div class="subtitle">Knowledge Graph Explorer</div>
+            </div>
+
+            <!-- Search -->
+            <div class="search-box">
+                <div class="search-wrapper">
+                    <input type="text" class="search-input" id="search-input"
+                           placeholder="Search functions, classes..." autocomplete="off">
+                </div>
+            </div>
+
+            <!-- Controls -->
+            <div class="controls">
+                <!-- View Mode -->
+                <div class="control-group">
+                    <div class="control-label">View Mode</div>
+                    <div class="btn-row">
+                        <button class="btn active" id="btn-namespace" onclick="switchView('namespace')">Namespaces</button>
+                        <button class="btn" id="btn-callchain" onclick="switchView('callchain')">Call Chain</button>
+                        <button class="btn" id="btn-inherit" onclick="switchView('inheritance')">Inheritance</button>
+                    </div>
+                </div>
+
+                <!-- Edge Filters -->
+                <div class="control-group">
+                    <div class="control-label">Edge Types</div>
+                    <div class="btn-row">
+                        <button class="btn btn-calls active" id="filter-CALLS" onclick="toggleEdge('CALLS')">Calls</button>
+                        <button class="btn btn-inherits active" id="filter-INHERITS_FROM" onclick="toggleEdge('INHERITS_FROM')">Inherits</button>
+                        <button class="btn btn-defines active" id="filter-DEFINES" onclick="toggleEdge('DEFINES')">Defines</button>
+                        <button class="btn btn-overrides active" id="filter-OVERRIDES" onclick="toggleEdge('OVERRIDES')">Overrides</button>
+                    </div>
+                </div>
+
+                <!-- Depth -->
+                <div class="control-group">
+                    <div class="control-label">Traversal Depth</div>
+                    <div class="depth-control">
+                        <input type="range" class="depth-slider" id="depth-slider" min="1" max="8" value="3">
+                        <span class="depth-value" id="depth-value">3</span>
+                    </div>
+                </div>
+
+                <!-- Layout -->
+                <div class="control-group">
+                    <div class="control-label">Layout</div>
+                    <div class="btn-row">
+                        <button class="btn active" id="layout-dagre" onclick="changeLayout('dagre')">Hierarchical</button>
+                        <button class="btn" id="layout-cose" onclick="changeLayout('cose')">Force</button>
+                        <button class="btn" id="layout-circle" onclick="changeLayout('circle')">Circle</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Results -->
+            <div class="results-panel" id="results-panel">
+                <div style="padding: 20px; text-align: center; color: var(--text-muted); font-size: 13px;">
+                    Search for a function or class, or select a namespace to begin exploring.
+                </div>
+            </div>
+
+            <!-- Stats -->
+            <div class="stats-bar" id="stats-bar">
+                <div class="stat">
+                    <div class="stat-value" id="stat-nodes">-</div>
+                    <div class="stat-label">Nodes</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value" id="stat-edges">-</div>
+                    <div class="stat-label">Edges</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value" id="stat-classes">-</div>
+                    <div class="stat-label">Classes</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value" id="stat-functions">-</div>
+                    <div class="stat-label">Functions</div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main -->
+        <main id="main">
+            <!-- Toolbar -->
+            <div id="toolbar">
+                <span class="view-label">View:</span>
+                <button class="btn btn-primary" id="btn-fit" onclick="fitGraph()">Fit</button>
+                <button class="btn" id="btn-reset" onclick="resetGraph()">Reset</button>
+                <div class="toolbar-separator"></div>
+                <button class="btn" id="btn-export" onclick="exportPNG()">Export PNG</button>
+                <div class="breadcrumb" id="breadcrumb"></div>
+            </div>
+
+            <!-- Graph -->
+            <div id="graph-container">
+                <div id="cy"></div>
+                <div class="loading hidden" id="loading">
+                    <div class="spinner"></div>
+                    <div class="loading-text">Loading graph data...</div>
+                </div>
+                <div class="empty-state" id="empty-state">
+                    <div class="icon">◇</div>
+                    <p>Select a namespace, search for a symbol, or load the graph to begin.</p>
+                </div>
+            </div>
+
+            <!-- Legend -->
+            <div class="legend">
+                <div class="legend-item">
+                    <div class="legend-dot" style="background: #8b5cf6;"></div> Class
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot" style="background: #3b82f6;"></div> Function
+                </div>
+                <div class="legend-item">
+                    <div class="legend-line" style="background: #3b82f6;"></div> Calls
+                </div>
+                <div class="legend-item">
+                    <div class="legend-line" style="background: #f59e0b;"></div> Inherits
+                </div>
+                <div class="legend-item">
+                    <div class="legend-line" style="background: #f43f5e;"></div> Overrides
+                </div>
+            </div>
+
+            <!-- Detail panel -->
+            <div id="detail-panel">
+                <button class="detail-close" onclick="closeDetail()">×</button>
+                <div id="detail-content"></div>
+            </div>
+        </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,65 @@
+# ===========================
+# Python
+# ===========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.whl
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# ===========================
+# OmniGraph runtime artifacts
+# ===========================
+# JSONL shard output (regenerated on each run)
+data/shards/*.jsonl
+
+# SQLite caches (GST + file hashes)
+data/cache/*.db
+data/cache/*.db-wal
+data/cache/*.db-shm
+
+# Parse error logs
+data/cache/parse_errors.log
+
+# ===========================
+# IDE / Editor
+# ===========================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ===========================
+# Neo4j local data (if running outside Docker)
+# ===========================
+neo4j_data/
+plugins/
+
+# ===========================
+# Docker
+# ===========================
+docker-compose.override.yml
+
+# ===========================
+# OS
+# ===========================
+Thumbs.db
+.DS_Store
+
+# ===========================
+# Misc
+# ===========================
+*.log
+.env

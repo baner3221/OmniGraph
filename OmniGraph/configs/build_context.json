@@ -1,0 +1,13 @@
+{
+    "cpp": {
+        "compile_commands_path": "",
+        "source_extensions": [".cpp", ".cc", ".cxx", ".c"],
+        "header_extensions": [".h", ".hpp", ".hxx"],
+        "extra_args": ["-std=c++17"]
+    },
+    "java": {
+        "source_roots": [],
+        "source_extensions": [".java"],
+        "classpath": []
+    }
+}
