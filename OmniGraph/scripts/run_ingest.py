@@ -60,8 +60,10 @@ Examples:
   # Clean re-index, Java only
   python scripts/run_ingest.py --source-root /path --clean --languages java
 
-  # With custom compile_commands.json
-  python scripts/run_ingest.py --source-root /path --compile-commands /path/to/build
+  # With include paths and compiler flags
+  python scripts/run_ingest.py --source-root /path \\
+      --include-flags /path/to/include /path/to/other/include \\
+      --compile-args -std=c++17 -DANDROID
         """,
     )
 
@@ -101,10 +103,16 @@ Examples:
         help="Comma-separated list of languages to parse (default: cpp,java)",
     )
     parser.add_argument(
-        "--compile-commands",
-        type=str,
+        "--include-flags",
+        nargs="*",
         default=None,
-        help="Path to directory containing compile_commands.json",
+        help="Header search paths (e.g., /path/to/include). -I prefix added automatically",
+    )
+    parser.add_argument(
+        "--compile-args",
+        nargs="*",
+        default=None,
+        help="Compiler flags (e.g., -std=c++17 -DANDROID -DLOG_TAG=\\\"MyTag\\\")",
     )
     parser.add_argument(
         "--db-config",
@@ -134,11 +142,13 @@ Examples:
         print(f"ERROR: Source root does not exist: {source_root}", file=sys.stderr)
         return 1
 
-    # Load build context
+    # Load build context (file-based defaults)
     build_ctx = load_build_context(args.build_context)
     cpp_ctx = build_ctx.get("cpp", {})
-    compile_commands = args.compile_commands or cpp_ctx.get("compile_commands_path", "")
-    extra_args = cpp_ctx.get("extra_args", ["-std=c++17"])
+
+    # CLI flags override build_context.json values
+    include_flags = args.include_flags if args.include_flags is not None else cpp_ctx.get("include_flags", [])
+    compile_args = args.compile_args if args.compile_args is not None else cpp_ctx.get("compile_args", ["-std=c++17"])
 
     # Parse languages
     languages = [lang.strip() for lang in args.languages.split(",")]
@@ -151,8 +161,8 @@ Examples:
         incremental=args.incremental,
         batch_size=args.batch_size,
         languages=languages,
-        compile_commands_path=compile_commands if compile_commands else None,
-        cpp_extra_args=extra_args,
+        cpp_include_flags=include_flags,
+        cpp_compile_args=compile_args,
         db_config_path=args.db_config,
         clean=args.clean,
     )

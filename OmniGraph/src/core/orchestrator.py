@@ -41,8 +41,8 @@ class OrchestratorConfig:
     incremental: bool = False
     batch_size: int = 10000
     languages: list[str] = field(default_factory=lambda: ["cpp", "java"])
-    compile_commands_path: Optional[str] = None
-    cpp_extra_args: list[str] = field(default_factory=lambda: ["-std=c++17"])
+    cpp_include_flags: list[str] = field(default_factory=list)
+    cpp_compile_args: list[str] = field(default_factory=lambda: ["-std=c++17"])
     shard_dir: str = "data/shards"
     cache_dir: str = "data/cache"
     db_config_path: str = "configs/db_config.yaml"
@@ -57,12 +57,9 @@ class OrchestratorConfig:
 
 def _parse_cpp_file(args: tuple) -> dict:
     """Worker: parse a single C++ file."""
-    filepath, shard_path, compile_commands_path, extra_args = args
+    filepath, shard_path, compile_args = args
     try:
-        parser = CppParser(
-            compile_commands_path=compile_commands_path,
-            extra_args=extra_args,
-        )
+        parser = CppParser(compile_args=compile_args)
         return parser.parse_file(filepath, shard_path)
     except Exception as e:
         return {"nodes": 0, "edges": 0, "symbols": [],
@@ -238,9 +235,17 @@ class Orchestrator:
         ts = int(time.time())
 
         # Build work items
+        # Merge include flags (-I paths) with compile args into a single list
+        merged_cpp_args = list(self.config.cpp_compile_args)
+        for inc in self.config.cpp_include_flags:
+            if inc.startswith("-I"):
+                merged_cpp_args.append(inc)
+            else:
+                merged_cpp_args.append(f"-I{inc}")
+
         cpp_work = [
             (fp, os.path.join(self.config.shard_dir, f"cpp_{i}_{ts}.jsonl"),
-             self.config.compile_commands_path, self.config.cpp_extra_args)
+             merged_cpp_args)
             for i, fp in enumerate(cpp_files)
         ]
         java_work = [

@@ -65,42 +65,16 @@ class CppParser:
 
     def __init__(
         self,
-        compile_commands_path: Optional[str] = None,
-        extra_args: Optional[list[str]] = None,
+        compile_args: Optional[list[str]] = None,
     ):
         """
         Args:
-            compile_commands_path: Path to compile_commands.json directory.
-            extra_args: Additional compiler flags (e.g., ["-std=c++17"]).
+            compile_args: Compiler flags including -I include paths,
+                          -std=c++17, -DFOO=1, etc. Already merged
+                          by the orchestrator from include_flags + compile_args.
         """
         self.index = cindex.Index.create()
-        self.compile_db: Optional[cindex.CompilationDatabase] = None
-        self.extra_args = extra_args or ["-std=c++17"]
-
-        if compile_commands_path and Path(compile_commands_path).exists():
-            try:
-                self.compile_db = cindex.CompilationDatabase.fromDirectory(
-                    compile_commands_path
-                )
-                logger.info("Loaded compile_commands.json from %s", compile_commands_path)
-            except cindex.CompilationDatabaseError as e:
-                logger.warning("Failed to load compile_commands.json: %s", e)
-
-    def _get_compile_args(self, filepath: str) -> list[str]:
-        """Get compilation arguments for a specific file."""
-        if self.compile_db:
-            try:
-                commands = self.compile_db.getCompileCommands(filepath)
-                if commands:
-                    # Extract args, skip the compiler binary (first element)
-                    args = list(commands[0].arguments)[1:]
-                    # Remove the source file itself from args
-                    args = [a for a in args if a != filepath and not a.endswith((".cpp", ".cc", ".cxx", ".c"))]
-                    return args
-            except Exception as e:
-                logger.debug("No compile commands for %s: %s", filepath, e)
-
-        return self.extra_args
+        self.compile_args = compile_args or ["-std=c++17"]
 
     def parse_file(self, filepath: str, shard_path: str) -> dict:
         """
@@ -117,10 +91,9 @@ class CppParser:
         filepath = os.path.abspath(filepath)
 
         try:
-            args = self._get_compile_args(filepath)
             tu = self.index.parse(
                 filepath,
-                args=args,
+                args=self.compile_args,
                 options=(
                     cindex.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD
                     | cindex.TranslationUnit.PARSE_SKIP_FUNCTION_BODIES * 0  # We need bodies for call analysis
