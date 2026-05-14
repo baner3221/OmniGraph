@@ -176,6 +176,5 @@ Examples:
         return 2 if summary.get("parsed_files", 0) > 0 else 1
     return 0
 
-
 if __name__ == "__main__":
     sys.exit(main())
