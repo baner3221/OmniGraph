@@ -10,8 +10,10 @@ Maps class hierarchies, function overloads/overrides, and caller-callee relation
 
 ### 1. Prerequisites
 
+- Ubuntu Linux (22.04+ recommended)
 - Python 3.10+
-- Docker & Docker Compose
+- Neo4j 5.x (installed locally — see setup below)
+- Clang (`sudo apt install clang`)
 
 ### 2. Setup
 
@@ -20,17 +22,28 @@ Maps class hierarchies, function overloads/overrides, and caller-callee relation
 cd OmniGraph
 
 # Create virtual environment
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 
 # Install dependencies
 pip install -r requirements.txt
 
-# Start Neo4j
-docker compose up -d
+# Install Neo4j (if not already installed)
+# See: https://neo4j.com/docs/operations-manual/current/installation/linux/debian/
+wget -O - https://debian.neo4j.com/neotechnology.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/neo4j-archive-keyring.gpg
+echo 'deb [signed-by=/usr/share/keyrings/neo4j-archive-keyring.gpg] https://debian.neo4j.com stable latest' | sudo tee /etc/apt/sources.list.d/neo4j.list
+sudo apt update
+sudo apt install neo4j
 
-# Wait for Neo4j to be ready (health check will report healthy)
-docker compose ps
+# Configure Neo4j
+sudo neo4j-admin dbms set-initial-password omnigraph_password
+
+# Start Neo4j
+sudo systemctl enable neo4j
+sudo systemctl start neo4j
+
+# Verify Neo4j is running
+sudo systemctl status neo4j
 ```
 
 ### 3. Configure
@@ -49,6 +62,8 @@ Edit `configs/build_context.json`:
 }
 ```
 
+For Android NDK Camera HAL codebases, see [docs/NDK_config_guide.md](docs/NDK_config_guide.md).
+
 ### 4. Run
 
 ```bash
@@ -63,6 +78,9 @@ python scripts/run_ingest.py --source-root /path --languages java --workers 4
 
 # Clean rebuild
 python scripts/run_ingest.py --source-root /path --clean
+
+# Android NDK C++ (Camera HAL)
+python scripts/run_ingest.py --source-root /path --ndk-config configs/ndk_config.json --languages cpp
 ```
 
 ### 5. Explore the Graph
@@ -134,3 +152,4 @@ RETURN DISTINCT affected.fqn, labels(affected);
 - **Memory O(1)**: File-by-file processing, no cross-file AST retention
 - **Incremental**: SHA-256 hash cache in SQLite skips unchanged files
 - **Error Tolerant**: Failed files are logged and skipped, never halt the pipeline
+- **No Docker Required**: Neo4j runs natively via `systemd` on Ubuntu Linux

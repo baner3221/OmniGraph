@@ -1,0 +1,10 @@
+{
+    "ndk_root": "",
+    "api_level": 21,
+    "target_arch": "aarch64",
+    "cpp_standard": "c++17",
+    "project_include_paths": [],
+    "extra_system_includes": [],
+    "defines": ["ANDROID"],
+    "extra_compile_args": []
+}

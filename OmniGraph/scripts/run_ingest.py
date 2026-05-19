@@ -117,8 +117,8 @@ Examples:
     parser.add_argument(
         "--db-config",
         type=str,
-        default="configs/db_config.yaml",
-        help="Path to Neo4j config YAML",
+        default="configs/db_config.json",
+        help="Path to Neo4j config JSON",
     )
     parser.add_argument(
         "--build-context",
@@ -131,6 +131,18 @@ Examples:
         action="store_true",
         default=False,
         help="Enable verbose (DEBUG) logging",
+    )
+    parser.add_argument(
+        "--ndk-config",
+        type=str,
+        default=None,
+        help="Path to ndk_config.json for Android NDK cross-compilation",
+    )
+    parser.add_argument(
+        "--no-auto-system-includes",
+        action="store_true",
+        default=False,
+        help="Disable automatic system include path detection",
     )
 
     args = parser.parse_args()
@@ -150,6 +162,14 @@ Examples:
     include_flags = args.include_flags if args.include_flags is not None else cpp_ctx.get("include_flags", [])
     compile_args = args.compile_args if args.compile_args is not None else cpp_ctx.get("compile_args", ["-std=c++17"])
 
+    # NDK config: CLI overrides build_context.json
+    ndk_config_path = args.ndk_config or cpp_ctx.get("ndk_config", "")
+
+    # Auto system includes: disabled by CLI flag, otherwise from build_context
+    auto_system_includes = not args.no_auto_system_includes
+    if auto_system_includes and "auto_system_includes" in cpp_ctx:
+        auto_system_includes = cpp_ctx["auto_system_includes"]
+
     # Parse languages
     languages = [lang.strip() for lang in args.languages.split(",")]
 
@@ -165,6 +185,8 @@ Examples:
         cpp_compile_args=compile_args,
         db_config_path=args.db_config,
         clean=args.clean,
+        auto_system_includes=auto_system_includes,
+        ndk_config_path=ndk_config_path,
     )
 
     # Run pipeline

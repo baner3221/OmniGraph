@@ -1,0 +1,14 @@
+{
+    "neo4j": {
+        "uri": "bolt://localhost:7687",
+        "user": "neo4j",
+        "password": "omnigraph_password",
+        "database": "neo4j"
+    },
+    "ingestion": {
+        "batch_size": 10000,
+        "max_retries": 3,
+        "retry_delay_seconds": 2,
+        "max_sessions": 4
+    }
+}

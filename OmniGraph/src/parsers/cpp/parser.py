@@ -66,15 +66,29 @@ class CppParser:
     def __init__(
         self,
         compile_args: Optional[list[str]] = None,
+        auto_system_includes: bool = True,
     ):
         """
         Args:
             compile_args: Compiler flags including -I include paths,
                           -std=c++17, -DFOO=1, etc. Already merged
                           by the orchestrator from include_flags + compile_args.
+            auto_system_includes: If True, auto-detect and inject Clang
+                          system include paths (stddef.h, stdint.h, etc.)
+                          when none are already present in compile_args.
         """
         self.index = cindex.Index.create()
         self.compile_args = compile_args or ["-std=c++17"]
+
+        # Auto-inject system includes so standard types (size_t, int32_t, etc.) resolve
+        if auto_system_includes:
+            from src.utils.system_includes import SystemIncludeDetector, has_system_includes
+            if not has_system_includes(self.compile_args):
+                detector = SystemIncludeDetector()
+                system_flags = detector.detect()
+                if system_flags:
+                    self.compile_args = system_flags + self.compile_args
+                    logger.info("Auto-injected %d system include flags", len(system_flags) // 2)
 
     def parse_file(self, filepath: str, shard_path: str) -> dict:
         """
@@ -96,19 +110,37 @@ class CppParser:
                 args=self.compile_args,
                 options=(
                     cindex.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD
-                    | cindex.TranslationUnit.PARSE_SKIP_FUNCTION_BODIES * 0  # We need bodies for call analysis
+                    | cindex.TranslationUnit.PARSE_INCOMPLETE
+                    | cindex.TranslationUnit.PARSE_KEEP_GOING
                 ),
             )
+        except cindex.TranslationUnitLoadError as e:
+            stats["errors"].append(f"Failed to parse translation unit {filepath}: {e}")
+            logger.error("TranslationUnitLoadError for %s: %s", filepath, e)
+            return stats
         except Exception as e:
             stats["errors"].append(f"Failed to parse {filepath}: {e}")
             logger.error("Failed to parse %s: %s", filepath, e)
             return stats
 
-        # Check for fatal diagnostics
+        if tu is None:
+            stats["errors"].append(f"Failed to parse {filepath}: parse returned None")
+            logger.error("libclang returned None for %s", filepath)
+            return stats
+
+        # Classify diagnostics by severity
+        stats["diagnostics"] = {"warnings": 0, "errors": 0, "fatals": 0}
         for diag in tu.diagnostics:
-            if diag.severity >= cindex.Diagnostic.Error:
+            if diag.severity == cindex.Diagnostic.Fatal:
+                stats["diagnostics"]["fatals"] += 1
+                stats["errors"].append(f"Clang fatal in {filepath}: {diag.spelling}")
+                logger.warning("Clang FATAL: %s", diag.spelling)
+            elif diag.severity >= cindex.Diagnostic.Error:
+                stats["diagnostics"]["errors"] += 1
                 stats["errors"].append(f"Clang error in {filepath}: {diag.spelling}")
-                logger.warning("Clang diagnostic: %s", diag.spelling)
+                logger.debug("Clang error: %s", diag.spelling)
+            elif diag.severity >= cindex.Diagnostic.Warning:
+                stats["diagnostics"]["warnings"] += 1
 
         # State tracking for call resolution
         context = _TraversalContext(filepath=filepath)

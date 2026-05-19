@@ -12,7 +12,6 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-import yaml
 from neo4j import GraphDatabase
 
 logger = logging.getLogger(__name__)
@@ -88,7 +87,7 @@ class Neo4jIngester:
         "OVERRIDES": CREATE_OVERRIDES_EDGES,
     }
 
-    def __init__(self, config_path: str = "configs/db_config.yaml"):
+    def __init__(self, config_path: str = "configs/db_config.json"):
         config = self._load_config(config_path)
         neo4j_cfg = config.get("neo4j", {})
 
@@ -107,7 +106,7 @@ class Neo4jIngester:
     @staticmethod
     def _load_config(path: str) -> dict:
         with open(path) as f:
-            return yaml.safe_load(f)
+            return json.load(f)
 
     def ensure_constraints(self) -> None:
         """Create unique constraints and indexes."""

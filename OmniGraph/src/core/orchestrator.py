@@ -45,21 +45,23 @@ class OrchestratorConfig:
     cpp_compile_args: list[str] = field(default_factory=lambda: ["-std=c++17"])
     shard_dir: str = "data/shards"
     cache_dir: str = "data/cache"
-    db_config_path: str = "configs/db_config.yaml"
+    db_config_path: str = "configs/db_config.json"
     clean: bool = False
     cpp_extensions: list[str] = field(
         default_factory=lambda: [".cpp", ".cc", ".cxx", ".c", ".h", ".hpp", ".hxx"]
     )
     java_extensions: list[str] = field(default_factory=lambda: [".java"])
+    auto_system_includes: bool = True
+    ndk_config_path: str = ""
 
 
 # ---- Top-level worker functions (must be picklable) ----
 
 def _parse_cpp_file(args: tuple) -> dict:
     """Worker: parse a single C++ file."""
-    filepath, shard_path, compile_args = args
+    filepath, shard_path, compile_args, auto_system_includes = args
     try:
-        parser = CppParser(compile_args=compile_args)
+        parser = CppParser(compile_args=compile_args, auto_system_includes=auto_system_includes)
         return parser.parse_file(filepath, shard_path)
     except Exception as e:
         return {"nodes": 0, "edges": 0, "symbols": [],
@@ -243,9 +245,31 @@ class Orchestrator:
             else:
                 merged_cpp_args.append(f"-I{inc}")
 
+        # Load NDK args if ndk_config is specified
+        if self.config.ndk_config_path:
+            from src.utils.ndk_args_builder import NdkArgsBuilder
+            try:
+                ndk_builder = NdkArgsBuilder(self.config.ndk_config_path)
+                validation_errors = ndk_builder.validate()
+                if validation_errors:
+                    for err in validation_errors:
+                        logger.error("NDK config error: %s", err)
+                        stats["errors"].append(f"NDK config error: {err}")
+                else:
+                    ndk_args = ndk_builder.build_args()
+                    logger.info("NDK config loaded: %s", ndk_builder.summary().replace('\n', ', '))
+                    logger.debug("NDK args: %s", ndk_args)
+                    # NDK args go first (target, sysroot), then user args
+                    merged_cpp_args = ndk_args + merged_cpp_args
+            except Exception as e:
+                logger.error("Failed to load NDK config: %s", e)
+                stats["errors"].append(f"Failed to load NDK config: {e}")
+
+        auto_sys = self.config.auto_system_includes
+
         cpp_work = [
             (fp, os.path.join(self.config.shard_dir, f"cpp_{i}_{ts}.jsonl"),
-             merged_cpp_args)
+             merged_cpp_args, auto_sys)
             for i, fp in enumerate(cpp_files)
         ]
         java_work = [

@@ -3,7 +3,9 @@
         "include_flags": [],
         "compile_args": ["-std=c++17"],
         "source_extensions": [".cpp", ".cc", ".cxx", ".c"],
-        "header_extensions": [".h", ".hpp", ".hxx"]
+        "header_extensions": [".h", ".hpp", ".hxx"],
+        "auto_system_includes": true,
+        "ndk_config": ""
     },
     "java": {
         "source_roots": [],
