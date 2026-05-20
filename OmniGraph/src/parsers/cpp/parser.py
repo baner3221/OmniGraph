@@ -80,6 +80,11 @@ class CppParser:
         self.index = cindex.Index.create()
         self.compile_args = compile_args or ["-std=c++17"]
 
+        # Always disable Clang's error limit — a parsing tool should extract
+        # as much AST as possible, never stop due to error count
+        if "-ferror-limit=0" not in self.compile_args:
+            self.compile_args.append("-ferror-limit=0")
+
         # Auto-inject system includes so standard types (size_t, int32_t, etc.) resolve
         if auto_system_includes:
             from src.utils.system_includes import SystemIncludeDetector, has_system_includes
@@ -116,7 +121,7 @@ class CppParser:
                 options=(
                     cindex.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD
                     | cindex.TranslationUnit.PARSE_INCOMPLETE
-                    | cindex.TranslationUnit.PARSE_KEEP_GOING
+                    | 0x200  # PARSE_KEEP_GOING (not in older Python bindings)
                 ),
             )
         except cindex.TranslationUnitLoadError as e:
@@ -134,6 +139,8 @@ class CppParser:
             return stats
 
         # Classify diagnostics by severity
+        # Note: Clang diagnostics are informational — they don't mean parsing failed.
+        # Only fatals may indicate degraded AST quality.
         stats["diagnostics"] = {"warnings": 0, "errors": 0, "fatals": 0}
         for diag in tu.diagnostics:
             if diag.severity == cindex.Diagnostic.Fatal:
@@ -142,8 +149,7 @@ class CppParser:
                 logger.warning("Clang FATAL: %s", diag.spelling)
             elif diag.severity >= cindex.Diagnostic.Error:
                 stats["diagnostics"]["errors"] += 1
-                stats["errors"].append(f"Clang error in {filepath}: {diag.spelling}")
-                logger.debug("Clang error: %s", diag.spelling)
+                logger.debug("Clang diagnostic: %s", diag.spelling)
             elif diag.severity >= cindex.Diagnostic.Warning:
                 stats["diagnostics"]["warnings"] += 1
 
@@ -153,6 +159,15 @@ class CppParser:
         # Open shard file for writing
         with open(shard_path, "a") as shard_file:
             self._traverse(tu.cursor, context, shard_file, stats)
+
+        # Per-file stats
+        basename = os.path.basename(filepath)
+        diag = stats.get("diagnostics", {})
+        logger.info(
+            "Parsed %s: %d nodes, %d edges, %d symbols | diag: %d warn, %d err, %d fatal",
+            basename, stats["nodes"], stats["edges"], len(stats["symbols"]),
+            diag.get("warnings", 0), diag.get("errors", 0), diag.get("fatals", 0),
+        )
 
         return stats
 
@@ -364,23 +379,24 @@ class CppParser:
             stats["edges"] += 1
 
         # Handle overrides (virtual method resolution)
-        try:
-            overridden = cursor.get_overridden_cursors()
-            if overridden:
-                for base_cursor in overridden:
-                    base_usr = base_cursor.get_usr()
-                    if base_usr:
-                        edge = Edge(
-                            source_usr=usr,
-                            target_usr=base_usr,
-                            relationship=EdgeType.OVERRIDES,
-                            file=context.filepath,
-                            line=cursor.location.line,
-                        )
-                        shard_file.write(Triple.from_edge(edge).model_dump_json() + "\n")
-                        stats["edges"] += 1
-        except Exception as e:
-            logger.debug("Override detection failed for %s: %s", fqn, e)
+        if hasattr(cursor, 'get_overridden_cursors'):
+            try:
+                overridden = cursor.get_overridden_cursors()
+                if overridden:
+                    for base_cursor in overridden:
+                        base_usr = base_cursor.get_usr()
+                        if base_usr:
+                            edge = Edge(
+                                source_usr=usr,
+                                target_usr=base_usr,
+                                relationship=EdgeType.OVERRIDES,
+                                file=context.filepath,
+                                line=cursor.location.line,
+                            )
+                            shard_file.write(Triple.from_edge(edge).model_dump_json() + "\n")
+                            stats["edges"] += 1
+            except Exception as e:
+                logger.debug("Override detection failed for %s: %s", fqn, e)
 
         # Push function context for tracking calls within this function
         prev_func = context.current_function_usr

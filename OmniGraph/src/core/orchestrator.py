@@ -55,6 +55,42 @@ class OrchestratorConfig:
     ndk_config_path: str = ""
     compile_commands_path: str = ""
 
+# ---- Clang resource directory detection ----
+
+def _find_clang_resource_include(compiler_path: str) -> str | None:
+    """Find the Clang resource include directory from a compiler binary path.
+
+    The resource dir contains compiler builtins (stddef.h, stdarg.h, etc.)
+    that the real compiler finds implicitly but libclang does not.
+
+    Typical NDK layout:
+        .../toolchains/llvm/prebuilt/<host>/bin/clang++
+        .../toolchains/llvm/prebuilt/<host>/lib/clang/<ver>/include/stddef.h
+        or .../lib64/clang/<ver>/include/stddef.h
+    """
+    import glob
+
+    # Resolve symlinks to get the real path
+    compiler_path = os.path.realpath(compiler_path)
+    bin_dir = os.path.dirname(compiler_path)
+    toolchain_root = os.path.dirname(bin_dir)  # parent of bin/
+
+    # Search for resource include dir in known locations
+    search_patterns = [
+        os.path.join(toolchain_root, "lib", "clang", "*", "include"),
+        os.path.join(toolchain_root, "lib64", "clang", "*", "include"),
+    ]
+
+    for pattern in search_patterns:
+        matches = sorted(glob.glob(pattern))
+        if matches:
+            # Use the latest version (last in sorted order)
+            candidate = matches[-1]
+            if os.path.isfile(os.path.join(candidate, "stddef.h")):
+                return candidate
+
+    return None
+
 
 # ---- Top-level worker functions (must be picklable) ----
 
@@ -365,7 +401,10 @@ class Orchestrator:
 
         Strips the compiler binary, -c, -o <output>, and source file from
         the arguments, returning only the flags relevant for libclang parsing.
+        Also auto-detects the Clang resource include directory (stddef.h, stdarg.h)
+        from the compiler binary path and injects it.
         """
+        import glob
         import json as _json
 
         compdb_path = Path(path)
@@ -384,6 +423,8 @@ class Orchestrator:
             return None
 
         result: dict[str, list[str]] = {}
+        compiler_binary = None
+
         for entry in entries:
             filepath = entry.get("file", "")
             directory = entry.get("directory", "")
@@ -401,6 +442,10 @@ class Orchestrator:
 
             if not args:
                 continue
+
+            # Save the compiler binary path from the first entry
+            if compiler_binary is None:
+                compiler_binary = args[0]
 
             # Strip: compiler binary (first arg), -c, -o <output>, source file
             clean_args = []
@@ -424,6 +469,22 @@ class Orchestrator:
                 clean_args.append(arg)
 
             result[filepath] = clean_args
+
+        # Auto-detect Clang resource include directory (contains stddef.h, stdarg.h).
+        # The real compiler finds these implicitly, but libclang doesn't.
+        resource_include = None
+        if compiler_binary:
+            resource_include = _find_clang_resource_include(compiler_binary)
+
+        if resource_include:
+            logger.info("Auto-detected Clang resource include: %s", resource_include)
+            for filepath in result:
+                result[filepath] = ["-isystem", resource_include] + result[filepath]
+        else:
+            logger.warning(
+                "Could not detect Clang resource include dir (stddef.h, stdarg.h "
+                "may not resolve). Set -isystem manually if needed."
+            )
 
         return result
 
