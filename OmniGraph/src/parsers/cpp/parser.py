@@ -90,19 +90,24 @@ class CppParser:
                     self.compile_args = system_flags + self.compile_args
                     logger.info("Auto-injected %d system include flags", len(system_flags) // 2)
 
-    def parse_file(self, filepath: str, shard_path: str) -> dict:
+    def parse_file(self, filepath: str, shard_path: str, source_root: str = "") -> dict:
         """
         Parse a single C++ source file and emit triples to a JSONL shard.
 
         Args:
             filepath: Absolute path to the C++ source file.
             shard_path: Path to the JSONL shard file for output.
+            source_root: Project source root. When set, symbols from project
+                         headers (under source_root) are extracted while system
+                         headers are skipped. When empty, only the main file
+                         is extracted (legacy behavior).
 
         Returns:
             Stats dict: {nodes: int, edges: int, errors: list[str]}
         """
         stats = {"nodes": 0, "edges": 0, "errors": [], "symbols": []}
         filepath = os.path.abspath(filepath)
+        source_root = os.path.abspath(source_root) if source_root else ""
 
         try:
             tu = self.index.parse(
@@ -143,7 +148,7 @@ class CppParser:
                 stats["diagnostics"]["warnings"] += 1
 
         # State tracking for call resolution
-        context = _TraversalContext(filepath=filepath)
+        context = _TraversalContext(filepath=filepath, source_root=source_root)
 
         # Open shard file for writing
         with open(shard_path, "a") as shard_file:
@@ -160,9 +165,11 @@ class CppParser:
     ) -> None:
         """Recursively traverse the AST, emitting triples."""
 
-        # Only process nodes in the main file (skip system headers)
-        if cursor.location.file and cursor.location.file.name != context.filepath:
-            return
+        # Filter: skip system/external headers, keep project headers
+        if cursor.location.file:
+            loc_file = cursor.location.file.name
+            if loc_file != context.filepath and not context.is_project_file(loc_file):
+                return
 
         kind = cursor.kind
 
@@ -549,10 +556,24 @@ class CppParser:
 class _TraversalContext:
     """Mutable traversal state passed through recursive AST walk."""
 
-    def __init__(self, filepath: str):
+    def __init__(self, filepath: str, source_root: str = ""):
         self.filepath = filepath
+        self.source_root = source_root
         self._class_stack: list[tuple[str, str]] = []  # (fqn, usr)
         self.current_function_usr: Optional[str] = None
+        self._file_cache: dict[str, bool] = {}  # cache is_project_file lookups
+
+    def is_project_file(self, path: str) -> bool:
+        """Check if a file path is under the project source root.
+
+        Returns False if source_root is not set (legacy: main-file-only mode).
+        Caches results to avoid repeated os.path operations during traversal.
+        """
+        if not self.source_root:
+            return False
+        if path not in self._file_cache:
+            self._file_cache[path] = path.startswith(self.source_root)
+        return self._file_cache[path]
 
     @property
     def current_class_fqn(self) -> Optional[str]:

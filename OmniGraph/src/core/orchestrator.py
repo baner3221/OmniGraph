@@ -53,16 +53,17 @@ class OrchestratorConfig:
     java_extensions: list[str] = field(default_factory=lambda: [".java"])
     auto_system_includes: bool = True
     ndk_config_path: str = ""
+    compile_commands_path: str = ""
 
 
 # ---- Top-level worker functions (must be picklable) ----
 
 def _parse_cpp_file(args: tuple) -> dict:
     """Worker: parse a single C++ file."""
-    filepath, shard_path, compile_args, auto_system_includes = args
+    filepath, shard_path, compile_args, auto_system_includes, source_root = args
     try:
         parser = CppParser(compile_args=compile_args, auto_system_includes=auto_system_includes)
-        return parser.parse_file(filepath, shard_path)
+        return parser.parse_file(filepath, shard_path, source_root=source_root)
     except Exception as e:
         return {"nodes": 0, "edges": 0, "symbols": [],
                 "errors": [f"Worker crash on {filepath}: {e}"]}
@@ -236,42 +237,88 @@ class Orchestrator:
         }
         ts = int(time.time())
 
-        # Build work items
-        # Merge include flags (-I paths) with compile args into a single list
-        merged_cpp_args = list(self.config.cpp_compile_args)
-        for inc in self.config.cpp_include_flags:
-            if inc.startswith("-I"):
-                merged_cpp_args.append(inc)
+        # ── Compilation Database mode ─────────────────────────────────────
+        # When a compile_commands.json is provided, use per-file flags
+        # directly from the build system. This supersedes ndk_config,
+        # include_flags, compile_args, and auto_system_includes.
+        compdb = None
+        if self.config.compile_commands_path:
+            compdb = self._load_compile_commands(self.config.compile_commands_path)
+            if compdb:
+                logger.info(
+                    "Loaded compilation database: %d entries from %s",
+                    len(compdb), self.config.compile_commands_path,
+                )
             else:
-                merged_cpp_args.append(f"-I{inc}")
+                logger.warning(
+                    "compile_commands.json loaded but empty: %s — falling back to global flags",
+                    self.config.compile_commands_path,
+                )
 
-        # Load NDK args if ndk_config is specified
-        if self.config.ndk_config_path:
-            from src.utils.ndk_args_builder import NdkArgsBuilder
-            try:
-                ndk_builder = NdkArgsBuilder(self.config.ndk_config_path)
-                validation_errors = ndk_builder.validate()
-                if validation_errors:
-                    for err in validation_errors:
-                        logger.error("NDK config error: %s", err)
-                        stats["errors"].append(f"NDK config error: {err}")
+        if compdb:
+            # Build per-file work items from compdb
+            # Auto system includes disabled — compdb already has all paths
+            cpp_work = []
+            matched, unmatched = 0, 0
+            for i, fp in enumerate(cpp_files):
+                fp_abs = os.path.abspath(fp)
+                file_args = compdb.get(fp_abs)
+                if file_args:
+                    matched += 1
+                    cpp_work.append((
+                        fp,
+                        os.path.join(self.config.shard_dir, f"cpp_{i}_{ts}.jsonl"),
+                        file_args,
+                        False,  # auto_system_includes = False (compdb has everything)
+                        self.config.source_root,
+                    ))
                 else:
-                    ndk_args = ndk_builder.build_args()
-                    logger.info("NDK config loaded: %s", ndk_builder.summary().replace('\n', ', '))
-                    logger.debug("NDK args: %s", ndk_args)
-                    # NDK args go first (target, sysroot), then user args
-                    merged_cpp_args = ndk_args + merged_cpp_args
-            except Exception as e:
-                logger.error("Failed to load NDK config: %s", e)
-                stats["errors"].append(f"Failed to load NDK config: {e}")
+                    unmatched += 1
+                    logger.debug("File not in compdb, skipping: %s", fp)
 
-        auto_sys = self.config.auto_system_includes
+            if unmatched:
+                logger.info(
+                    "compdb: %d files matched, %d files not in compdb (skipped)",
+                    matched, unmatched,
+                )
+        else:
+            # ── Legacy mode: global flags ─────────────────────────────────
+            # Merge include flags (-I paths) with compile args into a single list
+            merged_cpp_args = list(self.config.cpp_compile_args)
+            for inc in self.config.cpp_include_flags:
+                if inc.startswith("-I"):
+                    merged_cpp_args.append(inc)
+                else:
+                    merged_cpp_args.append(f"-I{inc}")
 
-        cpp_work = [
-            (fp, os.path.join(self.config.shard_dir, f"cpp_{i}_{ts}.jsonl"),
-             merged_cpp_args, auto_sys)
-            for i, fp in enumerate(cpp_files)
-        ]
+            # Load NDK args if ndk_config is specified
+            if self.config.ndk_config_path:
+                from src.utils.ndk_args_builder import NdkArgsBuilder
+                try:
+                    ndk_builder = NdkArgsBuilder(self.config.ndk_config_path)
+                    validation_errors = ndk_builder.validate()
+                    if validation_errors:
+                        for err in validation_errors:
+                            logger.error("NDK config error: %s", err)
+                            stats["errors"].append(f"NDK config error: {err}")
+                    else:
+                        ndk_args = ndk_builder.build_args()
+                        logger.info("NDK config loaded: %s", ndk_builder.summary().replace('\n', ', '))
+                        logger.debug("NDK args: %s", ndk_args)
+                        # NDK args go first (target, sysroot), then user args
+                        merged_cpp_args = ndk_args + merged_cpp_args
+                except Exception as e:
+                    logger.error("Failed to load NDK config: %s", e)
+                    stats["errors"].append(f"Failed to load NDK config: {e}")
+
+            auto_sys = self.config.auto_system_includes
+
+            cpp_work = [
+                (fp, os.path.join(self.config.shard_dir, f"cpp_{i}_{ts}.jsonl"),
+                 merged_cpp_args, auto_sys, self.config.source_root)
+                for i, fp in enumerate(cpp_files)
+            ]
+
         java_work = [
             (fp, os.path.join(self.config.shard_dir, f"java_{i}_{ts}.jsonl"))
             for i, fp in enumerate(java_files)
@@ -307,6 +354,78 @@ class Orchestrator:
                     stats["errors"].extend(result.get("errors", []))
 
         return stats
+
+    # ------------------------------------------------------------------
+    # Compilation Database loader
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _load_compile_commands(path: str) -> dict[str, list[str]] | None:
+        """Load compile_commands.json and return {abs_filepath: [compiler_args]}.
+
+        Strips the compiler binary, -c, -o <output>, and source file from
+        the arguments, returning only the flags relevant for libclang parsing.
+        """
+        import json as _json
+
+        compdb_path = Path(path)
+        if not compdb_path.exists():
+            logger.error("compile_commands.json not found: %s", path)
+            return None
+
+        try:
+            with open(compdb_path) as f:
+                entries = _json.load(f)
+        except Exception as e:
+            logger.error("Failed to parse compile_commands.json: %s", e)
+            return None
+
+        if not entries:
+            return None
+
+        result: dict[str, list[str]] = {}
+        for entry in entries:
+            filepath = entry.get("file", "")
+            directory = entry.get("directory", "")
+
+            # Make filepath absolute
+            if not os.path.isabs(filepath):
+                filepath = os.path.join(directory, filepath)
+            filepath = os.path.normpath(filepath)
+
+            # Get arguments (prefer "arguments" list, fall back to "command" string)
+            args = entry.get("arguments")
+            if args is None:
+                command = entry.get("command", "")
+                args = command.split() if command else []
+
+            if not args:
+                continue
+
+            # Strip: compiler binary (first arg), -c, -o <output>, source file
+            clean_args = []
+            skip_next = False
+            for i, arg in enumerate(args):
+                if i == 0:
+                    continue  # Skip compiler binary
+                if skip_next:
+                    skip_next = False
+                    continue
+                if arg == "-c":
+                    continue
+                if arg == "-o":
+                    skip_next = True
+                    continue
+                # Skip the source file itself
+                if os.path.normpath(os.path.join(directory, arg)) == filepath:
+                    continue
+                if arg == filepath:
+                    continue
+                clean_args.append(arg)
+
+            result[filepath] = clean_args
+
+        return result
 
     # ------------------------------------------------------------------
     # Phase 2: Java resolution

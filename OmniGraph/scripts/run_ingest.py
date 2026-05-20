@@ -144,6 +144,15 @@ Examples:
         default=False,
         help="Disable automatic system include path detection",
     )
+    parser.add_argument(
+        "--compile-commands",
+        type=str,
+        default=None,
+        help="Path to compile_commands.json (compilation database). "
+             "When set, uses per-file flags from the build system — "
+             "supersedes --ndk-config, --include-flags, --compile-args, "
+             "and --no-auto-system-includes",
+    )
 
     args = parser.parse_args()
     setup_logging(args.verbose)
@@ -165,10 +174,21 @@ Examples:
     # NDK config: CLI overrides build_context.json
     ndk_config_path = args.ndk_config or cpp_ctx.get("ndk_config", "")
 
+    # Compile commands: CLI overrides build_context.json
+    compile_commands_path = args.compile_commands or cpp_ctx.get("compile_commands", "")
+
     # Auto system includes: disabled by CLI flag, otherwise from build_context
     auto_system_includes = not args.no_auto_system_includes
     if auto_system_includes and "auto_system_includes" in cpp_ctx:
         auto_system_includes = cpp_ctx["auto_system_includes"]
+
+    # When using compile_commands, log that legacy flags are superseded
+    if compile_commands_path:
+        if ndk_config_path or include_flags or args.include_flags or args.compile_args:
+            logging.getLogger(__name__).info(
+                "compile_commands.json provided — ndk_config, include_flags, "
+                "and compile_args will be ignored for C++ files in the compdb"
+            )
 
     # Parse languages
     languages = [lang.strip() for lang in args.languages.split(",")]
@@ -187,6 +207,7 @@ Examples:
         clean=args.clean,
         auto_system_includes=auto_system_includes,
         ndk_config_path=ndk_config_path,
+        compile_commands_path=compile_commands_path,
     )
 
     # Run pipeline
