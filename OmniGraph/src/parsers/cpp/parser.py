@@ -353,6 +353,7 @@ class CppParser:
         triple = Triple.from_function(node)
         shard_file.write(triple.model_dump_json() + "\n")
         stats["nodes"] += 1
+        logger.debug("Function: %s(%s) [%s]", fqn, full_signature, node_kind.value)
 
         # Register in symbol list for GST
         stats["symbols"].append({

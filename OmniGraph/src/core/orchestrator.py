@@ -458,8 +458,20 @@ class Orchestrator:
                     continue
                 if arg == "-c":
                     continue
+                # -o <output> (two args) or -o<output> (joined)
                 if arg == "-o":
                     skip_next = True
+                    continue
+                if arg.startswith("-o") and not arg.startswith("-opt"):
+                    continue
+                # Dependency file flags that reference .o/.d paths
+                if arg in ("-MF", "-MQ", "-MT"):
+                    skip_next = True
+                    continue
+                if arg.startswith(("-MF", "-MQ", "-MT")) and len(arg) > 3:
+                    continue
+                # Skip any .o file argument
+                if arg.endswith(".o"):
                     continue
                 # Skip the source file itself
                 if os.path.normpath(os.path.join(directory, arg)) == filepath:
